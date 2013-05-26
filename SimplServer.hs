@@ -184,15 +184,17 @@ makeTransport login host port command = do
   writeLock <- newMVar ()
   chanRef <- newMVar M.empty
   readBuf <- newIORef ""
-  uniqueRef <- newIORef 0
+  uniqueRef <- newMVar 0
 
   let
     writeMsg msg = withMVar writeLock $ \ () ->
       BL.hPut sshIn (serialize msg)
 
+    mkUnique = modifyMVar uniqueRef $ \ i -> do
+      return (i + 1, i + 1)
+
     mkNewChan = do
-      chanId <- readIORef uniqueRef
-      writeIORef uniqueRef $! chanId + 1
+      chanId <- mkUnique
       chan <- newChan
       totalChan <- modifyMVar chanRef $ \ chanMap -> do
         let newChanMap = M.insert chanId chan chanMap
