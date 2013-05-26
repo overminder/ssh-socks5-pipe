@@ -1,3 +1,0 @@
-#!/bin/bash
-
-curl iframe.ip138.com/ic.asp -s "$@" | iconv -f gbk | grep "IP是" | sed -e "s/.*\[\(.*\)\].*/\1/"
