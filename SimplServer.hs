@@ -19,7 +19,7 @@ import Network.Socket
 import Network.BSD
 
 import Message
-import Util
+import Compat
 
 sshUser = "overmind"
 sshHost = "localhost"

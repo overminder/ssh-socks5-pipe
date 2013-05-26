@@ -13,7 +13,7 @@ import System.Exit
 import Control.Exception
 
 import Message
-import Util
+import Compat
 
 data ConnState
   = ConnState {
@@ -30,7 +30,7 @@ logFilePath = "/home/overmind/src/haskell/conch-proxy/remote.log"
 
 main = do
   writeLock <- newMVar ()
-  readBuf <- newIORef ""
+  readBuf <- newIORef B.empty
   sockMap <- newMVar M.empty
   chanRef <- newMVar M.empty
   logFile <- openFile logFilePath WriteMode
@@ -61,7 +61,7 @@ main = do
 
   writeLog "[main] startup"
   forever $ do
-    newData <- B.hGetSome stdin 4096
+    newData <- hGetSome stdin 4096
     case B.length newData of
       0 -> do
         writeLog "[main] shutdown"
@@ -140,8 +140,8 @@ doConnect chanId chan (Connect {..}) = do
           cleanUp (e :: IOException) = cleanUp'
 
         -- Read dst and write to local
-        forkIO $ (`catch` cleanUp) $ forever $ do
-          someData <- B.hGetSome dstHandle 4096
+        forkIO $ (`Control.Exception.catch` cleanUp) $ forever $ do
+          someData <- hGetSome dstHandle 4096
           case B.length someData of
             0 -> do
               writeLog $ "[doConnect] remote closed"
@@ -151,7 +151,7 @@ doConnect chanId chan (Connect {..}) = do
               writeMsg (WriteTo chanId someData)
 
         -- Read local and write to dst
-        forkIO $ (`catch` cleanUp) $ forever $ do
+        forkIO $ (`Control.Exception.catch` cleanUp) $ forever $ do
           msg <- readChan chan
           case msg of
             WriteTo {..} -> do
