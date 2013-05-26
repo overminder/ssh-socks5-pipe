@@ -1,4 +1,5 @@
-{-# LANGUAGE OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings, ScopedTypeVariables,
+             ForeignFunctionInterface #-}
 
 import Control.Applicative
 import Control.Exception
@@ -13,11 +14,9 @@ import Data.Char
 import System.Environment
 import System.FilePath
 import System.IO
+import System.Process
 import Network.Socket
 import Network.BSD
-
-import Network.SSH.Client.LibSSH2.Foreign
-import Network.SSH.Client.LibSSH2
 
 import Message
 import Util
@@ -30,7 +29,6 @@ listenPort = 1080
 
 data ServerState
   = ServerState {
-    servSshChan :: !Channel,
     servChanMap :: !(MVar (M.Map Int (Chan Message))),
     servWriteMsg :: !(Message -> IO ()),
     servMkNewChan :: !(IO (Int, Chan Message)),
@@ -172,58 +170,60 @@ handleConn (clientSock, _) = do
                                        ])
         hClose clientHandle
 
-makeTransport login host port command =
-  ssh login host port $ \s -> 
-    withChannel s $ \ch -> do
-      channelExecute ch command
-      putStrLn "SSH connection established."
+makeTransport login host port command = do
+  let sshProc = proc "/usr/bin/ssh" [ login ++ "@" ++ host, "-p"
+                                    , show port, command]
+  (Just sshIn, Just sshOut, _, _) <- createProcess $
+    sshProc { std_in = CreatePipe, std_out = CreatePipe }
 
-      writeLock <- newMVar ()
-      chanRef <- newMVar M.empty
-      readBuf <- newIORef ""
-      uniqueRef <- newIORef 0
+  hSetBuffering sshIn NoBuffering
+  hSetBuffering sshOut NoBuffering
 
-      let
-        writeMsg msg = do
-          takeMVar writeLock
-          writeChannel ch (toStrict (serialize msg))
-          putMVar writeLock ()
+  putStrLn "SSH connection established."
 
-        mkNewChan = do
-          chanId <- readIORef uniqueRef
-          writeIORef uniqueRef $! chanId + 1
-          chan <- newChan
-          totalChan <- modifyMVar chanRef $ \ chanMap -> do
-            let newChanMap = M.insert chanId chan chanMap
-            return (newChanMap, M.size newChanMap)
-          putStrLn $ "[mkNewChan] id=" ++ show chanId ++ ", totalChan=" ++
-                     show totalChan
-          return (chanId, chan)
+  writeLock <- newMVar ()
+  chanRef <- newMVar M.empty
+  readBuf <- newIORef ""
+  uniqueRef <- newIORef 0
 
-        removeChan chanId = do
-          totalChan <- modifyMVar chanRef $ \ chanMap -> do
-            let newChanMap = M.delete chanId chanMap
-            return (newChanMap, M.size newChanMap)
-          putStrLn $ "[removeChan] id=" ++ show chanId ++ ", totalChan=" ++
-                     show totalChan
+  let
+    writeMsg msg = withMVar writeLock $ \ () ->
+      BL.hPut sshIn (serialize msg)
 
-        initState = ServerState {
-          servSshChan = ch,
-          servChanMap = chanRef,
-          servWriteMsg = writeMsg,
-          servMkNewChan = mkNewChan,
-          servRemoveChan = removeChan
-        }
+    mkNewChan = do
+      chanId <- readIORef uniqueRef
+      writeIORef uniqueRef $! chanId + 1
+      chan <- newChan
+      totalChan <- modifyMVar chanRef $ \ chanMap -> do
+        let newChanMap = M.insert chanId chan chanMap
+        return (newChanMap, M.size newChanMap)
+      putStrLn $ "[mkNewChan] id=" ++ show chanId ++ ", totalChan=" ++
+                 show totalChan
+      return (chanId, chan)
 
-      -- Start socks5 part
-      forkIO_ (runReaderT startServer initState)
+    removeChan chanId = do
+      totalChan <- modifyMVar chanRef $ \ chanMap -> do
+        let newChanMap = M.delete chanId chanMap
+        return (newChanMap, M.size newChanMap)
+      putStrLn $ "[removeChan] id=" ++ show chanId ++ ", totalChan=" ++
+                 show totalChan
 
-      -- Start message dispatcher
-      forever $ do
-        bs <- B.append <$> readIORef readBuf <*> readChannel ch 4096
-        let (rest, msgs) = deserialize (toLazy bs)
-        writeIORef readBuf (toStrict rest)
-        forkIO_ (runReaderT (mapM_ handleMsg msgs) initState)
+    initState = ServerState {
+      servChanMap = chanRef,
+      servWriteMsg = writeMsg,
+      servMkNewChan = mkNewChan,
+      servRemoveChan = removeChan
+    }
+
+  -- Start socks5 part
+  forkIO_ (runReaderT startServer initState)
+
+  -- Start message dispatcher
+  forever $ do
+    bs <- B.append <$> readIORef readBuf <*> B.hGetSome sshOut 4096
+    let (rest, msgs) = deserialize (toLazy bs)
+    writeIORef readBuf (toStrict rest)
+    forkIO_ (runReaderT (mapM_ handleMsg msgs) initState)
 
 handleMsg msg = do
   let chanId = connId msg
@@ -236,15 +236,6 @@ handleMsg msg = do
         -- Channel was closed
         return ()
 
-ssh login host port actions = do
-  initialize True
-  home <- getEnv "HOME"
-  let known_hosts = home </> ".ssh" </> "known_hosts"
-      public = home </> ".ssh" </> "id_rsa.pub"
-      private = home </> ".ssh" </> "id_rsa"
-  withSSH2 known_hosts public private "" login host port $ actions
-  exit
-
 hGetByte :: Num a => Handle -> IO a
 hGetByte h = do
   bs <- B.hGet h 1
@@ -252,3 +243,4 @@ hGetByte h = do
   return (fromIntegral b)
 
 decodeAscii = map (chr . fromIntegral) . B.unpack
+

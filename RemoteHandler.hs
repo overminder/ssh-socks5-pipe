@@ -34,6 +34,7 @@ main = do
   sockMap <- newMVar M.empty
   chanRef <- newMVar M.empty
   logFile <- openFile logFilePath WriteMode
+  logLock <- newMVar ()
 
   mapM_ (`hSetBuffering` NoBuffering) [stdin, stdout, logFile]
 
@@ -43,7 +44,7 @@ main = do
       withMVar writeLock $ \ () -> do
         BL.hPut stdout $ serialize msg
 
-    writeLog s = hPutStrLn logFile s
+    writeLog s = withMVar logLock $ \ () -> hPutStrLn logFile s
 
     removeChan chanId = modifyMVar_ chanRef $ \ chanMap -> do
       writeLog $ "[removeChan] id=" ++ show chanId ++ ", totalChan=" ++
