@@ -11,7 +11,7 @@ import Data.Int
 data Message
   = Connect {
     connId :: !Int,
-    connHost :: !Int,
+    connHost :: !(Either Int String), -- ipv4 addr or hostname.
     connPort :: !Int
   }
   | ConnectResult {
@@ -31,6 +31,7 @@ data Message
 isConnect (Connect {}) = True
 isConnect _ = False
 
+-- XXX: derive generic instead?
 instance Binary Message where
   put (Connect {..})
     = put (0 :: Word8) *> put connId *> put connHost *> put connPort
@@ -58,7 +59,7 @@ serialize msg = len `BL.append` lbs
 deserialize :: BL.ByteString -> (BL.ByteString, [Message])
 deserialize bs
   | BL.length bs < headerLen = (bs, [])
-  | otherwise = go (decode (BL.take 8 bs)) (BL.drop 8 bs) bs
+  | otherwise = go (decode (BL.take headerLen bs)) (BL.drop headerLen bs) bs
   where
     go :: Int64 -> BL.ByteString -> BL.ByteString -> (BL.ByteString, [Message])
     go len rest bs
@@ -66,5 +67,5 @@ deserialize bs
       | otherwise = let (bs', msgs) = deserialize (BL.drop len rest)
                      in (bs', decode (BL.take len rest) : msgs)
 
-    headerLen = BL.length (encode (0 :: Int))
+    headerLen = BL.length (encode (0 :: Int64))
   

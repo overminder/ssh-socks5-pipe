@@ -1,5 +1,6 @@
 {-# LANGUAGE RecordWildCards, OverloadedStrings, ScopedTypeVariables #-}
 
+import Control.Applicative
 import Control.Concurrent
 import Control.Monad.Reader
 import qualified Data.Map as M
@@ -102,19 +103,25 @@ doConnect chanId chan (Connect {..}) = do
   writeLog <- asks connWriteLog
   writeMsg <- asks connWriteMsg
   removeChan <- asks connRemoveChan
-  let sockAddr = SockAddrInet (fromIntegral connPort) (fromIntegral connHost)
+  ipv4Addr <- case connHost of
+    Left ipv4Addr -> return (fromIntegral ipv4Addr)
+    Right hostName -> do
+      (ipv4Addr:_) <- liftIO $ hostAddresses <$> getHostByName hostName
+      return ipv4Addr
+  let sockAddr = SockAddrInet (fromIntegral connPort) ipv4Addr
+      showHostPort = show connHost ++ ":" ++ show connPort
 
   liftIO $ do
-    writeLog $ "[doConnect] Connecting " ++ show sockAddr
+    writeLog $ "[doConnect] Connecting " ++ showHostPort
     dstSock <- mkReusableSock
     connResult <- try (connect dstSock sockAddr)
     case connResult of
       Left (e :: IOException) -> do
-        writeLog $ "[doConnect] Failed to connect to " ++ show sockAddr
+        writeLog $ "[doConnect] Failed to connect to " ++ showHostPort
         writeMsg (ConnectResult connId False Nothing)
         removeChan chanId
       Right _ -> do
-        writeLog $ "[doConnect] Successfully connected to " ++ show sockAddr
+        writeLog $ "[doConnect] Successfully connected to " ++ showHostPort
         dstHandle <- socketToHandle dstSock ReadWriteMode
         hSetBuffering dstHandle NoBuffering
         SockAddrInet portUsed addrUsed <- getSocketName dstSock
