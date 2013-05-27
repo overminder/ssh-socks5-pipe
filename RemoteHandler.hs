@@ -26,7 +26,7 @@ data ConnState
 
 type ConnM = ReaderT ConnState IO
 
-logFilePath = "/home/overmind/src/haskell/conch-proxy/remote.log"
+logFilePath = "/tmp/hssk5-remote.log"
 
 main = do
   writeLock <- newMVar ()
