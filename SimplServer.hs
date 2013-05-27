@@ -96,7 +96,7 @@ handleConn (clientSock, _) = do
 
     --dstAddrName <- inet_ntoa packedDstAddr
     dstPort' <- decode <$> BL.hGet clientHandle 2 :: IO Word16
-    let dstPort = fromIntegral dstPort
+    let dstPort = fromIntegral dstPort'
 
     showHostPort <- pprHostPort dstHost dstPort
 
