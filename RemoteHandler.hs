@@ -40,7 +40,7 @@ main = do
   mapM_ (`hSetBuffering` NoBuffering) [stdin, stdout, logFile]
 
   let
-    writeMessage msg = let msgStr = serialize msg in msgStr `seq` do
+    writeMessage msg = let msgStr = serialize msg in
       withMVar writeLock $ \ () -> BL.hPut stdout msgStr
 
     writeLog s = withMVar logLock $ \ () -> hPutStrLn logFile s

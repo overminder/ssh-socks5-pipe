@@ -83,7 +83,9 @@ handleConn (clientSock, _) = do
 
     -- Address resolving (rfc1928, section 5)
     dstHost <- case addrType of
-      1 -> Left . decode . BL.reverse <$> BL.hGet clientHandle 4
+      1 -> do
+        ipv4Addr <- decode . BL.reverse <$> BL.hGet clientHandle 4 :: IO Word32
+        return (Left $ fromIntegral ipv4Addr)
       3 -> do
         domainNameLen <- hGetByte clientHandle
         Right . decodeAscii <$> B.hGet clientHandle domainNameLen
@@ -95,7 +97,15 @@ handleConn (clientSock, _) = do
     --dstAddrName <- inet_ntoa packedDstAddr
     dstPort <- decode <$> BL.hGet clientHandle 2 :: IO Word16
 
-    putStrLn $ "Requested dst is " ++ show dstHost ++ ":" ++ show dstPort
+    showHostPort <-
+      case dstHost of
+        Left ipv4Addr -> do
+          hostName <- inet_ntoa (fromIntegral ipv4Addr)
+          return (hostName ++ ":" ++ show dstPort)
+        Right hostName -> do
+          return (hostName ++ ":" ++ show dstPort)
+
+    putStrLn $ "Requested dst is " ++ showHostPort
 
     -- Ask for connection
     (chanId, chan) <- mkNewChan
@@ -106,8 +116,7 @@ handleConn (clientSock, _) = do
     if succ
       then do
         let Just (usingHost, usingPort) = mbHostPort
-        putStrLn $ "Connected to requested dst (" ++ show dstHost ++
-                   ":" ++ show dstPort ++ ")"
+        putStrLn $ "Connected to requested dst " ++ showHostPort
         usingHostName <- inet_ntoa (fromIntegral usingHost)
         putStrLn $ "Server bound addr/port: " ++ usingHostName ++
                    ":" ++ show usingPort
@@ -125,8 +134,7 @@ handleConn (clientSock, _) = do
         -- Enter recv/send loop
         let
           reallyCleanUp = do
-            putStrLn $ "Done for request " ++ show dstHost ++
-                       ":" ++ show dstPort
+            putStrLn $ "Done for request " ++ showHostPort
             removeChan chanId
             try (shutdown clientSock ShutdownBoth) :: IO (Either IOException ())
             hClose clientHandle
@@ -160,8 +168,7 @@ handleConn (clientSock, _) = do
               cleanUp'
 
       else do
-        putStrLn $ "Connection failed for " ++ show dstHost ++
-                   ":" ++ show dstPort
+        putStrLn $ "Connection failed for " ++ showHostPort
         -- Tell the client about the failure (rfc1928, section 6)
         B.hPutStr clientHandle (B.pack [ 5 -- Version
                                        , 4 -- Host unreachable (Actually we can
@@ -189,7 +196,7 @@ makeTransport login host port command = do
 
   let
     writeMsg msg = let msgStr = serialize msg
-                    in msgStr `seq` withMVar writeLock $ \ () ->
+                    in withMVar writeLock $ \ () ->
                          BL.hPut sshIn msgStr
 
     mkUnique = modifyMVar uniqueRef $ \ i -> do
@@ -241,10 +248,7 @@ handleMsg msg = do
         return ()
 
 hGetByte :: Num a => Handle -> IO a
-hGetByte h = do
-  bs <- B.hGet h 1
-  let [b] = B.unpack bs
-  return (fromIntegral b)
+hGetByte h = fromIntegral . B.head <$> B.hGet h 1
 
 decodeAscii = map (chr . fromIntegral) . B.unpack
 
