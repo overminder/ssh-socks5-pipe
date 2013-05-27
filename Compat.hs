@@ -15,6 +15,12 @@ mkReusableSock = do
   setSocketOption sock ReuseAddr 1
   return sock
 
+mkListeningSock port = do
+  sock <- mkReusableSock
+  bindSocket sock (SockAddrInet port iNADDR_ANY)
+  listen sock 5
+  return sock
+
 hGetByte :: Num a => Handle -> IO a
 hGetByte h = fromIntegral . B.head <$> B.hGet h 1
 

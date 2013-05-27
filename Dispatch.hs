@@ -9,7 +9,7 @@ import Data.IORef
 import qualified Data.ByteString as B
 import System.IO
 
-import Protocol
+import Message
 import Compat
 
 type ChanId = Int
