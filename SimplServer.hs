@@ -95,21 +95,16 @@ handleConn (clientSock, _) = do
       _ -> error $ "handleConn: addrType = " ++ show addrType
 
     --dstAddrName <- inet_ntoa packedDstAddr
-    dstPort <- decode <$> BL.hGet clientHandle 2 :: IO Word16
+    dstPort' <- decode <$> BL.hGet clientHandle 2 :: IO Word16
+    let dstPort = fromIntegral dstPort
 
-    showHostPort <-
-      case dstHost of
-        Left ipv4Addr -> do
-          hostName <- inet_ntoa (fromIntegral ipv4Addr)
-          return (hostName ++ ":" ++ show dstPort)
-        Right hostName -> do
-          return (hostName ++ ":" ++ show dstPort)
+    showHostPort <- pprHostPort dstHost dstPort
 
     putStrLn $ "Requested dst is " ++ showHostPort
 
     -- Ask for connection
     (chanId, chan) <- mkNewChan
-    writeMsg (Connect chanId dstHost (fromIntegral dstPort))
+    writeMsg (Connect chanId dstHost dstPort)
     
     -- Wait for reply
     (ConnectResult _ succ mbHostPort) <- readChan chan

@@ -101,7 +101,7 @@ doConnect chanId chan (Connect {..}) = do
   writeLog <- asks connWriteLog
   writeMsg <- asks connWriteMsg
   removeChan <- asks connRemoveChan
-  let showHostPort = show connHost ++ ":" ++ show connPort
+  showHostPort <- liftIO $ pprHostPort connHost connPort
   ipv4Addr <- case connHost of
     Left ipv4Addr -> return (fromIntegral ipv4Addr)
     Right hostName -> liftIO $ do
