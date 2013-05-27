@@ -14,6 +14,7 @@ import Data.Char
 import System.Environment
 import System.FilePath
 import System.IO
+import System.Info
 import System.Process
 import Network.Socket
 import Network.BSD
@@ -21,8 +22,6 @@ import Network.BSD
 import Message
 import Compat
 
-sshUser = "overmind"
-sshHost = "localhost"
 sshPort = 22
 
 listenPort = 1080
@@ -144,7 +143,7 @@ handleConn (clientSock, _) = do
           cleanUp (e :: IOException) = cleanUp'
 
         -- Read from client and send to ssh
-        forkIO_ $ (`catch` cleanUp) $ forever $ do
+        forkIO_ $ (`Control.Exception.catch` cleanUp) $ forever $ do
           someData <- B.hGetSome clientHandle 4096
           case B.length someData of
             0 -> do
@@ -154,7 +153,7 @@ handleConn (clientSock, _) = do
               writeMsg (WriteTo chanId someData)
 
         -- Read from ssh and send to client
-        forkIO_ $ (`catch` cleanUp) $ forever $ do
+        forkIO_ $ (`Control.Exception.catch` cleanUp) $ forever $ do
           msg <- readChan chan
           case msg of
             WriteTo _ someData -> do
@@ -173,20 +172,30 @@ handleConn (clientSock, _) = do
         try (shutdown clientSock ShutdownBoth) :: IO (Either IOException ())
         hClose clientHandle
 
+getSshProc login host port command
+  | os == "linux"   = proc "/usr/bin/ssh" [ login ++ "@" ++ host, "-p"
+                                          , show port, command
+                                          ]
+  | os == "mingw32" = proc "./plink.exe" [ "-l", login, host
+                                         , "-i", "./putty-priv-key"
+                                         , command
+                                         ]
+  | otherwise       = error $ "getSshProc: unsupported os: " ++ os
+
 makeTransport login host port command = do
-  let sshProc = proc "/usr/bin/ssh" [ login ++ "@" ++ host, "-p"
-                                    , show port, command]
+  let sshProc = getSshProc login host port command
   (Just sshIn, Just sshOut, _, _) <- createProcess $
     sshProc { std_in = CreatePipe, std_out = CreatePipe }
 
-  hSetBuffering sshIn NoBuffering
-  hSetBuffering sshOut NoBuffering
+  forM_ [sshIn, sshOut] $ \ h -> do
+    hSetBuffering h NoBuffering
+    hSetBinaryMode h True
 
   putStrLn "SSH connection established."
 
   writeLock <- newMVar ()
   chanRef <- newMVar M.empty
-  readBuf <- newIORef ""
+  readBuf <- newIORef B.empty
   uniqueRef <- newMVar 0
 
   let
