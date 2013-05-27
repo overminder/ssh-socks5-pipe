@@ -40,10 +40,8 @@ main = do
   mapM_ (`hSetBuffering` NoBuffering) [stdin, stdout, logFile]
 
   let
-    writeMessage msg = do
-      --writeLog $ "[writeMsg] " ++ show msg
-      withMVar writeLock $ \ () -> do
-        BL.hPut stdout $ serialize msg
+    writeMessage msg = let msgStr = serialize msg in msgStr `seq` do
+      withMVar writeLock $ \ () -> BL.hPut stdout msgStr
 
     writeLog s = withMVar logLock $ \ () -> hPutStrLn logFile s
 
@@ -103,13 +101,22 @@ doConnect chanId chan (Connect {..}) = do
   writeLog <- asks connWriteLog
   writeMsg <- asks connWriteMsg
   removeChan <- asks connRemoveChan
+  let showHostPort = show connHost ++ ":" ++ show connPort
   ipv4Addr <- case connHost of
     Left ipv4Addr -> return (fromIntegral ipv4Addr)
-    Right hostName -> do
-      (ipv4Addr:_) <- liftIO $ hostAddresses <$> getHostByName hostName
-      return ipv4Addr
+    Right hostName -> liftIO $ do
+      eiAddrs <- try $ hostAddresses <$> getHostByName hostName
+      case eiAddrs of
+        Left (e :: SomeException) -> do
+          -- Cannot resolve host
+          writeLog $ "[doConnect] Cannot resolve " ++ showHostPort
+          writeMsg (ConnectResult connId False Nothing)
+          removeChan chanId
+          myTid <- myThreadId
+          killThread myTid
+          return undefined -- not reached?
+        Right (ipv4Addr:_) -> return ipv4Addr
   let sockAddr = SockAddrInet (fromIntegral connPort) ipv4Addr
-      showHostPort = show connHost ++ ":" ++ show connPort
 
   liftIO $ do
     writeLog $ "[doConnect] Connecting " ++ showHostPort

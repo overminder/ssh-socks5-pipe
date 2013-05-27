@@ -167,6 +167,8 @@ handleConn (clientSock, _) = do
                                        , 4 -- Host unreachable (Actually we can
                                            -- be a bit more specific)
                                        ])
+        removeChan chanId
+        try (shutdown clientSock ShutdownBoth) :: IO (Either IOException ())
         hClose clientHandle
 
 makeTransport login host port command = do
@@ -186,8 +188,9 @@ makeTransport login host port command = do
   uniqueRef <- newMVar 0
 
   let
-    writeMsg msg = withMVar writeLock $ \ () ->
-      BL.hPut sshIn (serialize msg)
+    writeMsg msg = let msgStr = serialize msg
+                    in msgStr `seq` withMVar writeLock $ \ () ->
+                         BL.hPut sshIn msgStr
 
     mkUnique = modifyMVar uniqueRef $ \ i -> do
       return (i + 1, i + 1)
