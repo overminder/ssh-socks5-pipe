@@ -1,22 +1,22 @@
 module Compat where
 
+import Control.Applicative
+import Control.Concurrent
+import Control.Exception
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Char8 as BC8
 import Network.Socket
 import Network.BSD
 import System.IO
-
-toStrict :: BL.ByteString -> B.ByteString
-toStrict = B.concat . BL.toChunks
-
-toLazy :: B.ByteString -> BL.ByteString
-toLazy = BL.pack . B.unpack
 
 mkReusableSock = do
   proto <- getProtocolNumber "tcp"
   sock <- socket AF_INET Stream proto
   setSocketOption sock ReuseAddr 1
   return sock
+
+hGetByte :: Num a => Handle -> IO a
+hGetByte h = fromIntegral . B.head <$> B.hGet h 1
 
 hGetSome :: Handle -> Int -> IO B.ByteString
 hGetSome hh i
@@ -34,3 +34,14 @@ hGetSome hh i
                   in loop
     | i == 0    = return B.empty
 
+catchEx :: Exception e => IO a -> (e -> IO a) -> IO a
+catchEx = Control.Exception.catch
+
+decodeAscii :: B.ByteString -> String
+decodeAscii = BC8.unpack
+
+mkIdempotent m = do
+  lock <- newMVar m
+  return $ do
+    m <- swapMVar lock (return ())
+    m
