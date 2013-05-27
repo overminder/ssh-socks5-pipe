@@ -82,32 +82,31 @@ handleConn (clientSock, _) = do
     addrType <- hGetByte clientHandle
 
     -- Address resolving (rfc1928, section 5)
-    packedDstAddr <- case addrType of
-      1 -> decode . BL.reverse <$> BL.hGet clientHandle 4
+    dstHost <- case addrType of
+      1 -> Left . decode . BL.reverse <$> BL.hGet clientHandle 4
       3 -> do
         domainNameLen <- hGetByte clientHandle
-        domainName <- decodeAscii <$> B.hGet clientHandle domainNameLen
-        (hostName:_) <- hostAddresses <$> getHostByName domainName
-        return hostName
+        Right . decodeAscii <$> B.hGet clientHandle domainNameLen
+        -- XXX: put gethostbyname into remote side since GFW does DNS spoofing.
+        --(hostName:_) <- hostAddresses <$> getHostByName domainName
       4 -> error "handleConn: addrType = 4, ipv6 not supported."
       _ -> error $ "handleConn: addrType = " ++ show addrType
 
-    dstAddrName <- inet_ntoa packedDstAddr
+    --dstAddrName <- inet_ntoa packedDstAddr
     dstPort <- decode <$> BL.hGet clientHandle 2 :: IO Word16
 
-    putStrLn $ "Requested dst is " ++ dstAddrName ++ ":" ++ show dstPort
+    putStrLn $ "Requested dst is " ++ show dstHost ++ ":" ++ show dstPort
 
     -- Ask for connection
     (chanId, chan) <- mkNewChan
-    writeMsg (Connect chanId (fromIntegral packedDstAddr)
-                             (fromIntegral dstPort))
+    writeMsg (Connect chanId dstHost (fromIntegral dstPort))
     
     -- Wait for reply
     (ConnectResult _ succ mbHostPort) <- readChan chan
     if succ
       then do
         let Just (usingHost, usingPort) = mbHostPort
-        putStrLn $ "Connected to requested dst (" ++ dstAddrName ++
+        putStrLn $ "Connected to requested dst (" ++ show dstHost ++
                    ":" ++ show dstPort ++ ")"
         usingHostName <- inet_ntoa (fromIntegral usingHost)
         putStrLn $ "Server bound addr/port: " ++ usingHostName ++
@@ -126,7 +125,7 @@ handleConn (clientSock, _) = do
         -- Enter recv/send loop
         let
           reallyCleanUp = do
-            putStrLn $ "Done for request " ++ dstAddrName ++
+            putStrLn $ "Done for request " ++ show dstHost ++
                        ":" ++ show dstPort
             removeChan chanId
             try (shutdown clientSock ShutdownBoth) :: IO (Either IOException ())
@@ -161,7 +160,7 @@ handleConn (clientSock, _) = do
               cleanUp'
 
       else do
-        putStrLn $ "Connection failed for " ++ dstAddrName ++
+        putStrLn $ "Connection failed for " ++ show dstHost ++
                    ":" ++ show dstPort
         -- Tell the client about the failure (rfc1928, section 6)
         B.hPutStr clientHandle (B.pack [ 5 -- Version
