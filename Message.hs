@@ -7,11 +7,15 @@ import Data.Binary
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Int
+import Network.BSD
+import Network.Socket
+
+type ConnHost = Either Int String
 
 data Message
   = Connect {
     connId :: !Int,
-    connHost :: !(Either Int String), -- ipv4 addr or hostname.
+    connHost :: !ConnHost, -- ipv4 addr or hostname.
     connPort :: !Int
   }
   | ConnectResult {
@@ -69,3 +73,12 @@ deserialize bs
 
     headerLen = BL.length (encode (0 :: Int64))
   
+
+pprHostPort :: ConnHost -> Int -> IO String
+pprHostPort host port = case host of
+  Left ipv4Addr -> do
+    hostName <- inet_ntoa (fromIntegral ipv4Addr)
+    return (hostName ++ ":" ++ show port)
+  Right hostName -> do
+    return (hostName ++ ":" ++ show port)
+

@@ -97,13 +97,7 @@ handleConn (clientSock, _) = do
     --dstAddrName <- inet_ntoa packedDstAddr
     dstPort <- decode <$> BL.hGet clientHandle 2 :: IO Word16
 
-    showHostPort <-
-      case dstHost of
-        Left ipv4Addr -> do
-          hostName <- inet_ntoa (fromIntegral ipv4Addr)
-          return (hostName ++ ":" ++ show dstPort)
-        Right hostName -> do
-          return (hostName ++ ":" ++ show dstPort)
+    showHostPort <- pprHostPort dstHost dstPort
 
     putStrLn $ "Requested dst is " ++ showHostPort
 
