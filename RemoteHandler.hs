@@ -3,7 +3,7 @@
 import Control.Applicative
 import Control.Concurrent
 import Control.Monad
-import Control.Monad.IO.Class
+import Control.Monad.Trans
 import qualified Data.ByteString as B
 import Network.Socket
 import Network.BSD

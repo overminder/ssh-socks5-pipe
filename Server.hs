@@ -12,7 +12,6 @@ import System.Info
 import System.Process
 import Network.Socket
 import Network.BSD
-import qualified Data.String.Utils as SU
 
 import Dispatch
 import Protocol
@@ -56,7 +55,7 @@ parseFwdOpt fwdType = case fwdType of
 
     splitFwdArg fwdArg = (read port1, host, read port2)
       where
-        [port1, host, port2] = SU.split ":" fwdArg
+        [port1, host, port2] = split ':' fwdArg
 
     mkPortNum :: Int -> PortNumber
     mkPortNum = fromIntegral

@@ -171,7 +171,7 @@ runLocalLoop rawCleanUp cliH chanId chan = do
       handleErr (e :: SomeException) = doCleanUp
 
     forkIO $ (`catchEx` handleErr) $ forever $ do
-      someData <- B.hGetSome cliH 4096
+      someData <- hGetSome cliH 4096
       case B.null someData of
         False -> writeMsg (WriteTo chanId someData)
         True -> doCleanUp

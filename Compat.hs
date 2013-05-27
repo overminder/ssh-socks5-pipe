@@ -51,3 +51,11 @@ mkIdempotent m = do
   return $ do
     m <- swapMVar lock (return ())
     m
+
+split :: Eq a => a -> [a] -> [[a]]
+split x xs = case back of
+  [] -> [front]
+  _:rest -> front : split x rest
+  where
+    (front, back) = break (== x) xs
+
