@@ -97,14 +97,8 @@ runLocalPart = do
 
   liftIO $ writeMsg (HandShake fwdOpt)
   case fwdOpt of
-    FwdLocalDynamic {..} -> runLocalSocks5
-      -- Local socks5 server started
-    FwdRemoteDynamic {..} -> do
-      error $ "runLocalPart: remote dynamic not supported yet"
-    FwdLocal {..} -> do
-      -- Local port forwarder started
-      return ()
-    FwdRemote {..} -> do
-      -- Listen on ssh transport for connection request
-      error $ "runLocalPart: remote forwarding not supported yet"
+    FwdLocal {..}         -> runLocalServer handleLocalFwdReq
+    FwdLocalDynamic {..}  -> runLocalServer handleSocks5ClientReq
+    FwdRemote {..}        -> runPortForwarder
+    FwdRemoteDynamic {..} -> runPortForwarder
 

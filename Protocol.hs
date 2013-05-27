@@ -90,9 +90,18 @@ socks5TellConnSuccess h (usingHost, usingPort) = do
                       ] `B.append` packedAddr
                         `B.append` packedPort)
 
+-- Initialize chanMan: drop msg whose chanId is unknown, and redirect
+-- known msg to their corresponding chans.
+initListenerChanMan readMsg chanMan = forkIO $ forever $ do
+  msg <- readMsg
+  mbChan <- lookupChanById chanMan (connId msg)
+  case mbChan of
+    Nothing -> return () -- Drop this msg
+    Just chan -> writeChan chan msg
+
 -- XXX: use ReaderT?
-runLocalSocks5 :: ProtocolM ()
-runLocalSocks5 = do
+runLocalServer :: (Socket -> ProtocolM ()) -> ProtocolM ()
+runLocalServer handler = do
   -- Read many things...
   port <- asks (fwdListenPort . protoFwdOpt)
   readMsg <- asks protoReadMsg
@@ -103,81 +112,112 @@ runLocalSocks5 = do
   liftIO $ do
     -- Listen on local port
     listenSock <- mkListeningSock port
-
-    -- Initialize chanMan: drop msg whose chanId is unknown, and redirect
-    -- known msg to their corresponding chans.
-    forkIO $ forever $ do
-      msg <- readMsg
-      mbChan <- lookupChanById chanMan (connId msg)
-      case mbChan of
-        Nothing -> return () -- Drop this msg
-        Just chan -> writeChan chan msg
-
+    initListenerChanMan readMsg chanMan
+    writeLog $ "Start listen on " ++ show port
     -- Socks5 server accept loop
     forever $ do
       conn@(cliSock, _) <- accept listenSock
       writeLog $ show conn ++ " connected."
       -- Client connected
-      forkIO $ (runReaderT (handleConn cliSock) protoState)
-  where
-    handleConn :: Socket -> ProtocolM ()
-    handleConn cliSock = do
-      chanMan <- asks protoChanMan
-      writeMsg <- asks protoWriteMsg
+      forkIO $ (runReaderT (handler cliSock) protoState)
 
-      liftIO $ do
-        cliH <- socketToHandle cliSock ReadWriteMode
-        hSetBuffering cliH NoBuffering
+handleSocks5ClientReq :: Socket -> ProtocolM ()
+handleSocks5ClientReq cliSock = do
+  chanMan <- asks protoChanMan
+  writeMsg <- asks protoWriteMsg
+  protoState <- ask
 
+  liftIO $ do
+    cliH <- socketToHandle cliSock ReadWriteMode
+    hSetBuffering cliH NoBuffering
+
+    let
+      cleanUpCliConn = do
+        try (shutdown cliSock ShutdownBoth) :: IO (Either IOException ())
+        hClose cliH
+
+    -- XXX: error handling
+    (host, port) <- socks5HandShake cliH
+    (chanId, chan) <- mkNewChan chanMan
+
+    let
+      cleanUpChan = do
+        writeMsg (Disconnect chanId)
+        delChanById chanMan chanId
+        cleanUpCliConn
+
+    writeMsg (Connect chanId host port)
+    (ConnectResult _ succ mbHostPort) <- readChan chan
+    if not succ
+      then do
+        -- Connection failed
+        socks5TellConnFailure cliH
+        cleanUpChan
+
+      else do
         let
-          cleanUpCliConn = do
-            try (shutdown cliSock ShutdownBoth) :: IO (Either IOException ())
-            hClose cliH
+          Just usingHostPort = mbHostPort
+        socks5TellConnSuccess cliH usingHostPort
 
-        -- XXX: error handling
-        (host, port) <- socks5HandShake cliH
-        (chanId, chan) <- mkNewChan chanMan
+        -- Connection succeeded: start piping loop
+        runReaderT (runLocalLoop cleanUpChan cliH chanId chan) protoState
 
-        let
-          cleanUpChan = do
-            delChanById chanMan chanId
-            cleanUpCliConn
+runLocalLoop rawCleanUp cliH chanId chan = do
+  writeMsg <- asks protoWriteMsg
+  liftIO $ do
+    doCleanUp <- mkIdempotent rawCleanUp
 
-        writeMsg (Connect chanId host port)
-        (ConnectResult _ succ mbHostPort) <- readChan chan
-        if not succ
-          then do
-            -- Connection failed
-            socks5TellConnFailure cliH
-            cleanUpChan
+    let
+      handleErr (e :: SomeException) = doCleanUp
 
-          else do
-            -- Connection succeeded: start piping loop
-            doCleanUp <- mkIdempotent cleanUpChan
+    forkIO $ (`catchEx` handleErr) $ forever $ do
+      someData <- B.hGetSome cliH 4096
+      case B.null someData of
+        False -> writeMsg (WriteTo chanId someData)
+        True -> doCleanUp
 
-            let
-              Just usingHostPort = mbHostPort
-              handleErr (e :: SomeException) = doCleanUp
+    forkIO $ (`catchEx` handleErr) $ forever $ do
+      msg <- readChan chan
+      case msg of
+        WriteTo _ someData -> B.hPut cliH someData
+        Disconnect _ -> doCleanUp
 
-            socks5TellConnSuccess cliH usingHostPort
+    return ()
 
-            forkIO $ (`catchEx` handleErr) $ forever $ do
-              someData <- B.hGetSome cliH 4096
-              case B.null someData of
-                False -> writeMsg (WriteTo chanId someData)
-                True -> doCleanUp
+handleLocalFwdReq :: Socket -> ProtocolM ()
+handleLocalFwdReq cliSock = do
+  host <- asks (fwdConnectHost . protoFwdOpt)
+  port <- asks (fwdConnectPort . protoFwdOpt)
+  chanMan <- asks protoChanMan
+  writeMsg <- asks protoWriteMsg
+  protoState <- ask
 
-            forkIO $ (`catchEx` handleErr) $ forever $ do
-              msg <- readChan chan
-              case msg of
-                WriteTo _ someData -> B.hPut cliH someData
-                Disconnect _ -> doCleanUp
+  liftIO $ do
+    cliH <- socketToHandle cliSock ReadWriteMode
+    hSetBuffering cliH NoBuffering
 
-            return ()
+    (chanId, chan) <- mkNewChan chanMan
 
-runL2RForwarder listenSock (rHost, rPort) (readMsg, writeMsg)
-                chanMan writeLog = do
-  return ()
+    let
+      cleanUpCliConn = do
+        try (shutdown cliSock ShutdownBoth) :: IO (Either IOException ())
+        hClose cliH
+
+      cleanUpChan = do
+        writeMsg (Disconnect chanId)
+        delChanById chanMan chanId
+        cleanUpCliConn
+
+    writeMsg (Connect chanId (Right host) port)
+    (ConnectResult _ succ mbHostPort) <- readChan chan
+    if not succ
+      then do
+        -- Connection failed
+        cleanUpChan
+
+      else do
+        -- Connection succeeded: start piping loop
+        runReaderT (runLocalLoop cleanUpChan cliH chanId chan) protoState
 
 runPortForwarder :: ProtocolM ()
 runPortForwarder = do
@@ -242,6 +282,8 @@ runPortForwarder = do
         case connResult of
           Left (e :: IOException) -> do
             writeLog $ "Failed to connect to " ++ hostPort
+            -- Connection failed
+            writeMsg (ConnectResult connId False Nothing)
 
           Right _ -> do
             writeLog $ "Connected to " ++ hostPort
