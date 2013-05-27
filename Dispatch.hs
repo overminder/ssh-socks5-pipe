@@ -10,6 +10,7 @@ import qualified Data.ByteString as B
 import System.IO
 
 import Protocol
+import Compat
 
 type ChanId = Int
 
@@ -46,7 +47,7 @@ dispatchToChan :: Handle -> Chan Message -> IO ()
 dispatchToChan h chan = do
   readBuf <- newIORef B.empty
   forever $ do
-    newData <- B.hGetSome h 4096
+    newData <- hGetSome h 4096
     case B.null newData of
       False -> do
         bs <- B.append <$> readIORef readBuf <*> pure newData
