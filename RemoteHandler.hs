@@ -34,6 +34,8 @@ main = do
   maybe (return ()) (`hSetBuffering` NoBuffering) mbLogFile
   let writeLog = wLog mbLogFile logLock
 
+  writeLog "Startup"
+
   waitForCallable $ \ putCallable -> forkIO $ do
     (rMsg, wMsg) <- mkStdIOTransport writeLog putCallable
     -- First message: tells about forward mode.
@@ -62,7 +64,9 @@ mkStdIOTransport wLog callInMain = do
   let
     handleErr (e :: SomeException) = do
       wLog $ "stdin/out got EOF: exiting"
-      callInMain $ exitWith ExitSuccess
+      callInMain $ do
+        wLog "Shutdown"
+        exitWith ExitSuccess
 
   forkIO $ (`catchEx` handleErr) $ dispatchToChan stdin rChan
   forkIO $ (`catchEx` handleErr) $ dispatchFromChan wChan stdout
