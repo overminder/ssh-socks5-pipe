@@ -43,15 +43,6 @@ main = do
       FwdRemote {..}        -> runLocalServer handleLocalFwdReq
       FwdRemoteDynamic {..} -> runLocalServer handleSocks5ClientReq
 
-waitForCallable m = do
-  ref <- newEmptyMVar
-  let
-    callRef = do
-      f <- takeMVar ref
-      f
-  m (putMVar ref)
-  callRef
-
 mkStdIOTransport :: (String -> IO ()) -> (IO () -> IO ()) -> IO (ReadMsg, WriteMsg)
 mkStdIOTransport wLog callInMain = do
   forM_ [stdin, stdout] $ \ h -> do

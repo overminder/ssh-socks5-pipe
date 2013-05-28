@@ -59,3 +59,12 @@ split x xs = case back of
   where
     (front, back) = break (== x) xs
 
+waitForCallable m = do
+  ref <- newEmptyMVar
+  let
+    callRef = do
+      f <- takeMVar ref
+      f
+  m (putMVar ref)
+  callRef
+

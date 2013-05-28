@@ -9,6 +9,7 @@ import qualified Data.ByteString as B
 import System.Environment
 import System.IO
 import System.Info
+import System.Exit
 import System.Process
 import Network.Socket
 import Network.BSD
@@ -29,9 +30,10 @@ main = do
       let fwdOpt = parseFwdOpt fwdType fwdArg
           writeLog = wLog logLock
       writeLog (show fwdOpt)
-      (rMsg, wMsg) <- mkSshTransport user host 22 remotePath
-      chanMan <- mkChanManager
-      runProtocol (ProtocolState fwdOpt rMsg wMsg writeLog chanMan) runLocalPart
+      waitForCallable $ \ callInMain -> forkIO $ do
+        (rMsg, wMsg) <- mkSshTransport user host 22 remotePath callInMain
+        chanMan <- mkChanManager
+        runProtocol (ProtocolState fwdOpt rMsg wMsg writeLog chanMan) runLocalPart
     _ -> hPutStr stderr usage
 
   where
@@ -60,8 +62,9 @@ parseFwdOpt fwdType = case fwdType of
     mkPortNum :: Int -> PortNumber
     mkPortNum = fromIntegral
 
-mkSshTransport :: String -> String -> Int -> String -> IO (ReadMsg, WriteMsg)
-mkSshTransport user host port command = do
+mkSshTransport :: String -> String -> Int -> String -> (IO () -> IO ()) ->
+                  IO (ReadMsg, WriteMsg)
+mkSshTransport user host port command callInMain = do
   (Just sshIn, Just sshOut, _, _) <- createProcess $
     sshProc { std_in = CreatePipe, std_out = CreatePipe }
 
@@ -72,8 +75,12 @@ mkSshTransport user host port command = do
   rChan <- newChan
   wChan <- newChan
 
-  forkIO $ dispatchToChan sshOut rChan
-  forkIO $ dispatchFromChan wChan sshIn
+  let
+    handleErr (e :: SomeException) = do
+      callInMain $ exitSuccess
+
+  forkIO $ (`catchEx` handleErr) $ dispatchToChan sshOut rChan
+  forkIO $ (`catchEx` handleErr) $ dispatchFromChan wChan sshIn
 
   -- SSH connection established.
   return (readChan rChan, writeChan wChan)
