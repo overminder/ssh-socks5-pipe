@@ -1,5 +1,7 @@
 {-# LANGUAGE RecordWildCards, ScopedTypeVariables #-}
 
+module Main where
+
 import Control.Applicative
 import Control.Monad
 import Control.Concurrent
@@ -21,8 +23,6 @@ import Compat
 
 wLog lock s = do
   withMVar lock $ \ () -> hPutStrLn stderr $ "[Server] " ++ s
-wLogB lock bs = do
-  withMVar lock $ \ () -> B.hPut stderr bs
 
 main = do
   args <- getArgs
@@ -31,7 +31,6 @@ main = do
       logLock <- newMVar ()
       let fwdOpt = parseFwdOpt fwdType fwdArg
           writeLog = wLog logLock
-          writeLogB = wLogB logLock
       writeLog (show fwdOpt)
       waitForCallable $ \ callInMain -> forkIO $ do
         (rMsg, wMsg, sshErr) <- mkSshTransport user host 22
@@ -39,10 +38,8 @@ main = do
         chanMan <- mkChanManager
 
         forkIO $ forever $ do
-          debugMsg <- hGetSome sshErr 4096
-          case B.null debugMsg of
-            True -> throwIO $ userError "sshErr got EOF"
-            False -> writeLogB debugMsg
+          debugMsg <- hGetLine sshErr
+          writeLog debugMsg
 
         let protoState = ProtocolState fwdOpt rMsg wMsg writeLog chanMan
         runProtocol protoState runLocalPart

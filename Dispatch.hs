@@ -2,12 +2,14 @@
 module Dispatch where
 
 import Control.Applicative
+import Control.Exception
 import Control.Concurrent
 import Control.Monad
 import qualified Data.Map as M
 import Data.IORef
 import qualified Data.ByteString as B
 import System.IO
+import Data.Serialize
 
 import Message
 import Compat
@@ -44,21 +46,27 @@ delChanById (ChanManager {..}) chanId
 
 -- Single-threaded message dispatcher
 dispatchToChan :: Handle -> Chan Message -> IO ()
-dispatchToChan h chan = do
-  readBuf <- newIORef B.empty
-  forever $ do
-    newData <- hGetSome h 4096
-    case B.null newData of
-      False -> do
-        bs <- B.append <$> readIORef readBuf <*> pure newData
-        let (rest, msgs) = unpackNetStr bs
-        writeIORef readBuf rest
-        mapM_ (writeChan chan) msgs
-      True ->
-        error "dispatchToChan: EOF"
+dispatchToChan h chan = dispatchToChan' h chan (runGetPartial get)
+
+dispatchToChan' h chan parse = do
+  newData <- hGetSome h 4096
+  case B.null newData of
+    False -> do
+      let (msgs, parse') = go parse newData
+      mapM_ (writeChan chan) msgs
+      dispatchToChan' h chan parse'
+    True ->
+      throwIO $ userError "dispatchToChan: EOF"
+  where
+    go parse bs = case parse bs of
+      Done msg rest ->
+        let (msgs, parse') = go (runGetPartial get) rest
+         in (msg:msgs, parse')
+      Partial parse' -> ([], parse')
+      Fail why -> error $ "parseMessage: " ++ why
 
 dispatchFromChan :: Chan Message -> Handle -> IO ()
 dispatchFromChan chan h = forever $ do
   msg <- readChan chan
-  B.hPut h (packNetStr msg)
+  B.hPut h (encode msg)
 

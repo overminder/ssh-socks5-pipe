@@ -108,32 +108,6 @@ instance Serialize Message where
       3 -> Disconnect <$> get
       4 -> HandShake <$> get
 
-packNetStr :: Serialize a => a -> B.ByteString
-packNetStr msg = len `B.append` bs
-  where
-    bs = encode msg
-    len = encode (B.length bs)
-
--- XXX: sharing of bytestring could consume lots of memory?
-unpackNetStr :: Serialize a => B.ByteString -> (B.ByteString, [a])
-unpackNetStr bs
-  | B.length bs < headerLen = (bs, [])
-  | otherwise = go (decodeRight (B.take headerLen bs)) (B.drop headerLen bs) bs
-  where
-    go :: Serialize a => Int -> B.ByteString ->
-                         B.ByteString -> (B.ByteString, [a])
-    go len rest bs
-      | B.length rest < len = (bs, [])
-      | otherwise = let (bs', as) = unpackNetStr (B.drop len rest)
-                        a = decodeRight (B.take len rest)
-                     in (bs', a:as)
-
-    headerLen = B.length (encode (0 :: Int))
-
-    decodeRight bs = case decode bs of
-      Left s -> error $ "unpackNetStr: " ++ s
-      Right x -> x
-
 -- A pure version of ntoa
 ntoa :: HostAddress -> String
 ntoa addr = L.intercalate "." $ map show bytes
