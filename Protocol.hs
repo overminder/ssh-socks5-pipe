@@ -100,7 +100,7 @@ initListenerChanMan readMsg chanMan = forkIO $ forever $ do
     Just chan -> writeChan chan msg
 
 -- XXX: use ReaderT?
-runLocalServer :: (Socket -> ProtocolM ()) -> ProtocolM ()
+runLocalServer :: ((Socket, SockAddr) -> ProtocolM ()) -> ProtocolM ()
 runLocalServer handler = do
   -- Read many things...
   port <- asks (fwdListenPort . protoFwdOpt)
@@ -116,13 +116,13 @@ runLocalServer handler = do
     writeLog $ "Start listen on " ++ show port
     -- Socks5 server accept loop
     forever $ do
-      conn@(cliSock, _) <- accept listenSock
-      writeLog $ show conn ++ " connected."
+      conn@(cliSock, hostPort) <- accept listenSock
+      writeLog $ show hostPort ++ " connected."
       -- Client connected
-      forkIO $ (runReaderT (handler cliSock) protoState)
+      forkIO $ (runReaderT (handler conn) protoState)
 
-handleSocks5ClientReq :: Socket -> ProtocolM ()
-handleSocks5ClientReq cliSock = do
+handleSocks5ClientReq :: (Socket, SockAddr) -> ProtocolM ()
+handleSocks5ClientReq (cliSock, sockAddr) = do
   chanMan <- asks protoChanMan
   writeMsg <- asks protoWriteMsg
   protoState <- ask
@@ -160,10 +160,12 @@ handleSocks5ClientReq cliSock = do
         socks5TellConnSuccess cliH usingHostPort
 
         -- Connection succeeded: start piping loop
-        runReaderT (runLocalLoop cleanUpChan cliH chanId chan) protoState
+        runProtocol protoState $
+          runFwdLoop cleanUpChan cliH chanId chan (show sockAddr)
 
-runLocalLoop rawCleanUp cliH chanId chan = do
+runFwdLoop rawCleanUp cliH chanId chan cliName = do
   writeMsg <- asks protoWriteMsg
+  writeLog <- asks protoWriteLog
   liftIO $ do
     doCleanUp <- mkIdempotent rawCleanUp
 
@@ -174,18 +176,22 @@ runLocalLoop rawCleanUp cliH chanId chan = do
       someData <- hGetSome cliH 4096
       case B.null someData of
         False -> writeMsg (WriteTo chanId someData)
-        True -> doCleanUp
+        True -> do
+          writeLog $ "[runFwdLoop] " ++ cliName ++ " closed"
+          throwIO $ userError "remote closed"
 
     forkIO $ (`catchEx` handleErr) $ forever $ do
       msg <- readChan chan
       case msg of
         WriteTo _ someData -> B.hPut cliH someData
-        Disconnect _ -> doCleanUp
+        Disconnect _ -> do
+          writeLog $ "[runFwdLoop] got disconnect msg"
+          throwIO $ userError "got disconnect msg"
 
     return ()
 
-handleLocalFwdReq :: Socket -> ProtocolM ()
-handleLocalFwdReq cliSock = do
+handleLocalFwdReq :: (Socket, SockAddr) -> ProtocolM ()
+handleLocalFwdReq (cliSock, sockAddr) = do
   host <- asks (fwdConnectHost . protoFwdOpt)
   port <- asks (fwdConnectPort . protoFwdOpt)
   chanMan <- asks protoChanMan
@@ -217,7 +223,8 @@ handleLocalFwdReq cliSock = do
 
       else do
         -- Connection succeeded: start piping loop
-        runReaderT (runLocalLoop cleanUpChan cliH chanId chan) protoState
+        runProtocol protoState $ do
+          runFwdLoop cleanUpChan cliH chanId chan (show sockAddr)
 
 runPortForwarder :: ProtocolM ()
 runPortForwarder = do
@@ -272,11 +279,12 @@ runPortForwarder = do
       writeLog <- asks protoWriteLog
       writeMsg <- asks protoWriteMsg
       chanMan <- asks protoChanMan
+      protoState <- ask
 
       liftIO $ do
         let sockAddr = SockAddrInet connPort addr
             hostPort = pprHostPort connHost connPort
-        writeLog $ "Connecting to " ++ hostPort
+        writeLog $ "Connecting to " ++ hostPort ++ "..."
         dstSock <- mkReusableSock
         connResult <- try (connect dstSock sockAddr)
         case connResult of
@@ -303,34 +311,6 @@ runPortForwarder = do
                 hClose dstH
                 delChanById chanMan chanId
 
-            doCleanUp <- mkIdempotent reallyCleanUp
-
-            let
-              handleErr (e :: SomeException) = doCleanUp
-
-            -- Read dst and write to local
-            forkIO $ (`catchEx` handleErr) $ forever $ do
-              someData <- hGetSome dstH 4096
-              case B.null someData of
-                True -> do
-                  writeLog $ "[doConnect] remote closed"
-                  doCleanUp
-                False -> do
-                  let len = B.length someData
-                  writeLog $ "[doConnect] dst->local " ++ show len ++ " bytes"
-                  writeMsg (WriteTo chanId someData)
-
-            -- Read local and write to dst
-            forkIO $ (`catchEx` handleErr) $ forever $ do
-              msg <- readChan chan
-              case msg of
-                WriteTo {..} -> do
-                  let len = B.length writeContent
-                  writeLog $ "[doConnect] local->dst " ++ show len ++ " bytes"
-                  B.hPut dstH writeContent
-                Disconnect {..} -> do
-                  writeLog $ "[doConnect] local closed"
-                  doCleanUp
-
-            return ()
+            runProtocol protoState $ do
+              runFwdLoop reallyCleanUp dstH chanId chan hostPort
 

@@ -43,7 +43,8 @@ main = do
       FwdRemote {..}        -> runLocalServer handleLocalFwdReq
       FwdRemoteDynamic {..} -> runLocalServer handleSocks5ClientReq
 
-mkStdIOTransport :: (String -> IO ()) -> (IO () -> IO ()) -> IO (ReadMsg, WriteMsg)
+mkStdIOTransport :: (String -> IO ()) -> (IO () -> IO ()) ->
+                    IO (ReadMsg, WriteMsg)
 mkStdIOTransport wLog callInMain = do
   forM_ [stdin, stdout] $ \ h -> do
     hSetBuffering h NoBuffering
