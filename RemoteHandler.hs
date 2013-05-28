@@ -18,17 +18,21 @@ import Message
 import Compat
 import Protocol
 
-wLog h lock s = do
+type TryCatch a = IO (Either SomeException a)
+
+wLog mbH lock s = do
+  let toPrint = "[Remote] " ++ s
   withMVar lock $ \ () -> do
-    hPutStrLn h $ "[Remote] " ++ s
-    try (hPutStrLn stderr $ "[Remote] " ++ s) :: IO (Either SomeException ())
+    maybe (return ()) (`hPutStrLn` toPrint) mbH
+    try (hPutStrLn stderr $ "[Remote] " ++ s) :: TryCatch ()
     return ()
 
 main = do
   logLock <- newMVar ()
-  logFile <- openFile "/tmp/remote.log" WriteMode
-  hSetBuffering logFile NoBuffering
-  let writeLog = wLog logFile logLock
+  eiLogFile <- try (openFile "/tmp/remote.log" WriteMode) :: TryCatch Handle
+  let mbLogFile = either (const Nothing) Just eiLogFile
+  maybe (return ()) (`hSetBuffering` NoBuffering) mbLogFile
+  let writeLog = wLog mbLogFile logLock
 
   waitForCallable $ \ putCallable -> forkIO $ do
     (rMsg, wMsg) <- mkStdIOTransport writeLog putCallable
