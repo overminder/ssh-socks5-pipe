@@ -21,6 +21,8 @@ import Compat
 
 wLog lock s = do
   withMVar lock $ \ () -> hPutStrLn stderr $ "[Server] " ++ s
+wLogB lock bs = do
+  withMVar lock $ \ () -> B.hPut stderr bs
 
 main = do
   args <- getArgs
@@ -29,11 +31,21 @@ main = do
       logLock <- newMVar ()
       let fwdOpt = parseFwdOpt fwdType fwdArg
           writeLog = wLog logLock
+          writeLogB = wLogB logLock
       writeLog (show fwdOpt)
       waitForCallable $ \ callInMain -> forkIO $ do
-        (rMsg, wMsg) <- mkSshTransport user host 22 remotePath callInMain
+        (rMsg, wMsg, sshErr) <- mkSshTransport user host 22
+                                remotePath callInMain
         chanMan <- mkChanManager
-        runProtocol (ProtocolState fwdOpt rMsg wMsg writeLog chanMan) runLocalPart
+
+        forkIO $ forever $ do
+          debugMsg <- hGetSome sshErr 4096
+          case B.null debugMsg of
+            True -> throwIO $ userError "sshErr got EOF"
+            False -> writeLogB debugMsg
+
+        let protoState = ProtocolState fwdOpt rMsg wMsg writeLog chanMan
+        runProtocol protoState runLocalPart
     _ -> hPutStr stderr usage
 
   where
@@ -63,12 +75,13 @@ parseFwdOpt fwdType = case fwdType of
     mkPortNum = fromIntegral
 
 mkSshTransport :: String -> String -> Int -> String -> (IO () -> IO ()) ->
-                  IO (ReadMsg, WriteMsg)
+                  IO (ReadMsg, WriteMsg, Handle)
 mkSshTransport user host port command callInMain = do
-  (Just sshIn, Just sshOut, _, _) <- createProcess $
-    sshProc { std_in = CreatePipe, std_out = CreatePipe }
+  (Just sshIn, Just sshOut, Just sshErr, _) <- createProcess $
+    sshProc { std_in = CreatePipe, std_out = CreatePipe
+            , std_err = CreatePipe }
 
-  forM_ [sshIn, sshOut] $ \ h -> do
+  forM_ [sshIn, sshOut, sshErr] $ \ h -> do
     hSetBuffering h NoBuffering
     hSetBinaryMode h True
 
@@ -83,7 +96,7 @@ mkSshTransport user host port command callInMain = do
   forkIO $ (`catchEx` handleErr) $ dispatchFromChan wChan sshIn
 
   -- SSH connection established.
-  return (readChan rChan, writeChan wChan)
+  return (readChan rChan, writeChan wChan, sshErr)
   where
     sshProc
       | os == "linux"   = proc "/usr/bin/ssh" [ user ++ "@" ++ host
